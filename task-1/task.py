@@ -15,8 +15,8 @@ from test import testdata_kmeans, testdata_knn, testdata_ann
 
 
 def distance_cosine(X, Y):
-  X_norm = cp.linalg.norm(X, axis=1, keepdims=True)
-  Y_norm = cp.linalg.norm(Y, axis=1, keepdims=True)
+  X_norm = cp.linalg.norm(X, axis=1, keepdims=True) + 1e-8
+  Y_norm = cp.linalg.norm(Y, axis=1, keepdims=True) + 1e-8
   dot_product = cp.dot(X, Y.T)
   cosine_similarity = dot_product / (X_norm * Y_norm.T)
   return 1 - cosine_similarity
@@ -26,11 +26,11 @@ def distance_l2(X, Y):
   X_sq = cp.sum(X**2, axis=1, keepdims=True)
   Y_sq = cp.sum(Y**2, axis=1, keepdims=True)
   XY = cp.dot(X, Y.T)
-  return X_sq + Y_sq.T - 2 * XY
+  return cp.sqrt(X_sq + Y_sq.T - 2 * XY)
 
 
 def distance_dot(X, Y):
-  return -cp.dot(X, Y.T)
+  return cp.dot(X, Y.T)
 
 
 def distance_manhattan(X, Y):

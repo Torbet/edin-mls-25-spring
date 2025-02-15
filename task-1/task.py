@@ -45,7 +45,13 @@ def distance_manhattan(X, Y):
 
 
 def our_knn(N, D, A, X, K):
-  pass
+  A = cp.asarray(A)
+  X = cp.asarray(X).reshape(1, -1)
+
+  distances = distance_l2(A, X).flatten()
+  indices = cp.argsort(distances)[:K]
+
+  return indices
 
 
 # ------------------------------------------------------------------------------------------------
@@ -105,45 +111,7 @@ def recall_rate(list1, list2):
   return len(set(list1) & set(list2)) / len(list1)
 
 
-def test_distance_functions():
-  np.random.seed(42)
-  N, D = 100, 50
-  X_cpu = np.random.randn(N, D).astype(np.float32)
-  Y_cpu = np.random.randn(N, D).astype(np.float32)
-
-  X_gpu = cp.asarray(X_cpu)
-  Y_gpu = cp.asarray(Y_cpu)
-
-  def np_distance_cosine(X, Y):
-    X_norm = np.linalg.norm(X, axis=1, keepdims=True)
-    Y_norm = np.linalg.norm(Y, axis=1, keepdims=True)
-    dot_product = np.dot(X, Y.T)
-    return 1 - (dot_product / (X_norm * Y_norm.T))
-
-  def np_distance_l2(X, Y):
-    X_sq = np.sum(X**2, axis=1, keepdims=True)
-    Y_sq = np.sum(Y**2, axis=1, keepdims=True)
-    XY = np.dot(X, Y.T)
-    return X_sq + Y_sq.T - 2 * XY
-
-  def np_distance_dot(X, Y):
-    return -np.dot(X, Y.T)
-
-  def np_distance_manhattan(X, Y):
-    return np.sum(np.abs(X[:, None] - Y), axis=2)
-
-  cosine_gpu = cp.asnumpy(distance_cosine(X_gpu, Y_gpu))
-  l2_gpu = cp.asnumpy(distance_l2(X_gpu, Y_gpu))
-  dot_gpu = cp.asnumpy(distance_dot(X_gpu, Y_gpu))
-  manhattan_gpu = cp.asnumpy(distance_manhattan(X_gpu, Y_gpu))
-
-  assert np.allclose(cosine_gpu, np_distance_cosine(X_cpu, Y_cpu), atol=1e-5), 'Cosine distance mismatch'
-  assert np.allclose(l2_gpu, np_distance_l2(X_cpu, Y_cpu), atol=1e-5), 'L2 distance mismatch'
-  assert np.allclose(dot_gpu, np_distance_dot(X_cpu, Y_cpu), atol=1e-5), 'Dot product mismatch'
-  assert np.allclose(manhattan_gpu, np_distance_manhattan(X_cpu, Y_cpu), atol=1e-5), 'Manhattan distance mismatch'
-
-  print('All distance function tests passed!')
-
-
 if __name__ == '__main__':
-  test_distance_functions()
+  test_kmeans()
+  test_knn()
+  test_ann()

@@ -1,6 +1,8 @@
 import numpy as np
 import json
 
+np.random.seed(0)
+
 
 def read_data(file_path=''):
   """

@@ -52,6 +52,7 @@ def our_knn(N, D, A, X, K):
   A = cp.asarray(A)
   X = cp.asarray(X).reshape(1, -1)
 
+  # L2 default
   distances = distance_l2(A, X).flatten()
   indices = cp.argsort(distances)[:K]
 

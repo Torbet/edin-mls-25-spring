@@ -5,6 +5,10 @@ import numpy as np
 import time
 import json
 from test import testdata_kmeans, testdata_knn, testdata_ann
+
+np.random.seed(0)
+cp.random.seed(0)
+
 # ------------------------------------------------------------------------------------------------
 # Your Task 1.1 code here
 # ------------------------------------------------------------------------------------------------
@@ -64,7 +68,22 @@ def our_knn(N, D, A, X, K):
 
 
 def our_kmeans(N, D, A, K):
-  pass
+  A = cp.asarray(A)
+  centroids = A[cp.random.choice(N, K, replace=False)]
+
+  for _ in range(100):
+    distances = distance_l2(A, centroids)
+    labels = cp.argmin(distances, axis=1)
+
+    # new_centroids = cp.array([A[labels == k].mean(axis=0) if cp.any(labels == k) else centroids[k] for k in range(K)])
+    new_centroids = cp.array([cp.mean(A[labels == k], axis=0) for k in range(K)])
+
+    if cp.allclose(centroids, new_centroids):
+      break
+
+    centroids = new_centroids
+
+  return labels
 
 
 # ------------------------------------------------------------------------------------------------

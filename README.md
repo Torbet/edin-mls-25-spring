@@ -11,7 +11,7 @@ The full course schedule, assessments, and additional details are available in t
 ## Repository Structure
 
 - [**Task-1**](./task-1): Part 1, Implementing machine learning operators with GPU programming.
-- [**Task-2**](./task-2): Part 2, Integrating the operator into a distributed ML system (ServerlessLLM + RAG).
+- [**Task-2**](./task-2): Part 2, Integrating the operator into an end-to-end RAG serving pipeline.
 - [**Resources**](./resources): Slides and reading materials related to the course.
 
 ---
@@ -29,7 +29,9 @@ The full course schedule, assessments, and additional details are available in t
 - Learn about performance optimization and profiling.
 
 ### Task 2: Integration into Distributed System
-- Integrate your Task 1 operator into a distributed ML system using ServerlessLLM and RAG.
+- Deploy an end-to-end RAG serving system.
+- Measure the system performance.
+- Optimize the deployment with a request queue and batcher.
 
 ### Paper Writing
 - Write a paper documenting your work on both tasks in the format of a NeurIPS or ICML paper.

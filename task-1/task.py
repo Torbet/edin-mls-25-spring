@@ -95,7 +95,52 @@ def our_kmeans(N, D, A, K):
 
 
 def our_ann(N, D, A, X, K):
-  pass
+  A = cp.asarray(A)
+    X = cp.asarray(X).reshape(1, -1)
+    
+    K1 = min(20, N // 50 + 1)  # Number of clusters
+    K2 = min(50, N // 10 + 1)  # Number of candidates per cluster
+    
+    # 1. Use KMeans to cluster the data into K1 clusters
+    cluster_labels = our_kmeans(N, D, A, K1)
+    
+    centroids = cp.zeros((K1, D))
+    for k in range(K1):
+        if cp.any(cluster_labels == k):
+            centroids[k] = cp.mean(A[cluster_labels == k], axis=0)
+    
+    # 2. Find the nearest K1 cluster centers to the query point
+    distances_to_centroids = distance_l2(centroids, X).flatten()
+    nearest_clusters = cp.argsort(distances_to_centroids)[:K1]
+    
+    # 3. For each of the K1 clusters, find K2 nearest neighbors
+    candidate_indices = []
+    for cluster_idx in nearest_clusters:
+        cluster_points_indices = cp.where(cluster_labels == cluster_idx)[0]
+        
+        if len(cluster_points_indices) > 0:
+            cluster_points = A[cluster_points_indices]
+            distances = distance_l2(cluster_points, X).flatten()
+            
+            k2_actual = min(K2, len(cluster_points_indices))
+            nearest_indices = cp.argsort(distances)[:k2_actual]
+            candidate_indices.append(cluster_points_indices[nearest_indices])
+    
+    # 4. Merge candidates from all clusters and find overall top K
+    if candidate_indices:
+        all_candidates = cp.concatenate(candidate_indices)
+        all_candidates_points = A[all_candidates]
+        
+        distances = distance_l2(all_candidates_points, X).flatten()
+        
+        k_actual = min(K, len(all_candidates))
+        top_k_indices = cp.argsort(distances)[:k_actual]
+        
+  
+        return all_candidates[top_k_indices]
+    
+    return our_knn(N, D, A, X, K)
+
 
 
 # ------------------------------------------------------------------------------------------------

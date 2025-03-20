@@ -60,6 +60,6 @@ Take up to MAX_BATCH_SIZE requests from the queue or wait until MAX_WAITING_TIME
 Process the batched requests
 
 
-3. Measure the performance of each step compared to the original service
+3. Measure the performance of the optimized system compared to the original service
 
 4. Draw a conclusion

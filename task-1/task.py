@@ -224,12 +224,12 @@ def torch_knn(N, D, A, X, K, distance='l2'):
 #     pass
 
 
-def our_kmeans(N, D, A, K, distance=distance_l2):
+def our_kmeans(N, D, A, K, distance='l2'):
   A = cp.asarray(A)
   centroids = A[cp.random.choice(N, K, replace=False)]
 
   for _ in range(100):  # max iters
-    distances = distance(A, centroids)
+    distances = dists[distance]['gpu'](A, centroids)
     labels = cp.argmin(distances, axis=1)
 
     # new_centroids = cp.array([A[labels == k].mean(axis=0) if cp.any(labels == k) else centroids[k] for k in range(K)])

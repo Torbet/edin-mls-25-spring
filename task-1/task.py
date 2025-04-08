@@ -50,12 +50,15 @@ def distance_cosine_torch(X, Y):
 
 def distance_l2(X, Y):
   return cp.sqrt(cp.sum((X[:, None] - Y) ** 2, axis=2))
-  
+
+
 def distance_l2_np(X, Y):
   return np.sqrt(np.sum((X[:, None] - Y) ** 2, axis=2))
 
+
 def distance_l2_torch(X, Y):
   return torch.sqrt(torch.sum((X[:, None] - Y) ** 2, dim=2))
+
 
 def distance_dot(X, Y):
   return cp.dot(X, Y.T)
@@ -247,9 +250,8 @@ def our_kmeans(N, D, A, K, distance=distance_l2):
 # You can create any kernel here
 
 
-def our_ann(N, D, A, X, K, distance=distance_l2):
-  A = cp.asarray(A)
-  X = cp.asarray(X).reshape(1, -1)
+def our_ann(N, D, A, X, K, d='l2'):
+  distance = dists[d]['gpu']
 
   K1 = min(20, N // 50 + 1)  # Number of clusters
   K2 = min(50, N // 10 + 1)  # Number of candidates per cluster

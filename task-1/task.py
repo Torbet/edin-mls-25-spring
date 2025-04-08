@@ -49,25 +49,13 @@ def distance_cosine_torch(X, Y):
 
 
 def distance_l2(X, Y):
-  X_sq = cp.sum(X**2, axis=1, keepdims=True)
-  Y_sq = cp.sum(Y**2, axis=1, keepdims=True)
-  XY = cp.dot(X, Y.T)
-  return cp.sqrt(X_sq + Y_sq.T - 2 * XY)
-
-
+  return cp.sqrt(cp.sum((X[:, None] - Y) ** 2, axis=2))
+  
 def distance_l2_np(X, Y):
-  X_sq = np.sum(X**2, axis=1, keepdims=True)
-  Y_sq = np.sum(Y**2, axis=1, keepdims=True)
-  XY = np.dot(X, Y.T)
-  return np.sqrt(X_sq + Y_sq.T - 2 * XY)
-
+  return np.sqrt(np.sum((X[:, None] - Y) ** 2, axis=2))
 
 def distance_l2_torch(X, Y):
-  X_sq = torch.sum(X**2, dim=1, keepdim=True)
-  Y_sq = torch.sum(Y**2, dim=1, keepdim=True)
-  XY = torch.mm(X, Y.T)
-  return torch.sqrt(X_sq + Y_sq.T - 2 * XY)
-
+  return torch.sqrt(torch.sum((X[:, None] - Y) ** 2, dim=2))
 
 def distance_dot(X, Y):
   return cp.dot(X, Y.T)
@@ -418,9 +406,13 @@ def test_ann():
 
 
 def test_recall_rate():
-  N, D, A, X, K = testdata_ann('')
+  N, D, A, X, K = testdata_ann('data/knn_10.json')
+  A, X = cp.asarray(A), cp.asarray(X)
   ann_result = our_ann(N, D, A, X, K)
   knn_result = our_knn(N, D, A, X, K)
+  # to numpy
+  ann_result = cp.asnumpy(ann_result)
+  knn_result = cp.asnumpy(knn_result)
   print('Recall rate:', recall_rate(ann_result, knn_result))
 
 
@@ -434,7 +426,7 @@ def recall_rate(list1, list2):
 
 
 if __name__ == '__main__':
-  distance = 'manhattan'
+  distance = 'l2'
   results = {}
   for i in range(1, 11):
     results[i] = test_knn(i)

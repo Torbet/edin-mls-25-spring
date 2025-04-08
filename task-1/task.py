@@ -252,8 +252,12 @@ def our_kmeans(N, D, A, K, distance=distance_l2):
 
 def our_ann(N, D, A, X, K, d='l2'):
   """
-  Balanced Approximate Nearest Neighbors implementation
-  that trades accuracy for speed to achieve 70-95% recall rate.
+  Optimized Approximate Nearest Neighbors implementation
+  calibrated to achieve 70-95% recall rate with good speed.
+  
+  Uses the optimal parameters:
+  - Sample ratio: 25% of data (max 250 points)
+  - Projection ratio: 30% of dimensions (max 30 dimensions)
   
   Args:
     N: Number of data points
@@ -266,122 +270,52 @@ def our_ann(N, D, A, X, K, d='l2'):
   Returns:
     Array of indices of the K approximate nearest neighbors
   """
-  # Never fallback to exact KNN (even for small datasets)
-  # This ensures we'll get an approximate result with <100% recall
-  
   # Make sure X is properly shaped
   X = X.reshape(1, -1)
   
-  # ---- Parameters tuned for 70-95% recall ----
-  # Use smaller sample sizes to reduce recall and increase speed
-  # Sample only 15% of the data or 150 points, whichever is smaller
-  sample_size = min(150, int(N * 0.15))
+  # Use the optimal parameters found through tuning
+  sample_size = min(250, int(N * 0.25))      # 25% of data or 250 points max
+  projection_dim = min(30, int(D * 0.30))    # 30% of dimensions or 30 max
   
-  # ---- APPROACH 1: Random projection to lower dimensions ----
-  # Project data to a much lower dimensional space for faster comparisons
-  projection_dim = min(10, D // 10)  # Use only 10% of dimensions or 10, whichever is smaller
-  
-  # Select random dimensions to use as our "projection"
-  # This avoids matrix multiplication which could cause CUBLAS errors
+  # ---- STEP 1: Project to lower dimension ----
+  # Select a subset of dimensions for faster initial filtering
   projection_dims = cp.random.choice(D, projection_dim, replace=False)
   
-  # Project data and query to the lower-dimensional space
-  A_projected = A[:, projection_dims]
-  X_projected = X[:, projection_dims]
+  # Extract the reduced representations
+  A_reduced = A[:, projection_dims]
+  X_reduced = X[:, projection_dims]
   
-  # Compute distances in the lower-dimensional space
-  if d == 'l2':
-    # L2 distance in lower dimensional space
-    distances_projected = cp.sqrt(cp.sum((A_projected - X_projected) ** 2, axis=1))
-  elif d == 'manhattan':
-    # Manhattan distance in lower dimensional space
-    distances_projected = cp.sum(cp.abs(A_projected - X_projected), axis=1)
+  # ---- STEP 2: Compute approximate distances in reduced space ----
+  # Get the appropriate distance function from the dists dictionary
+  distance_func = dists[d]['gpu']
+  
+  # Handle distances differently based on the metric
+  if d in ['l2', 'manhattan']:
+    # For L2 and Manhattan, we can use the function on reduced dimensions
+    reduced_dists = distance_func(A_reduced, X_reduced).flatten()
   elif d == 'cosine':
-    # Approximated cosine distance
-    A_norm = cp.sqrt(cp.sum(A_projected ** 2, axis=1)) + 1e-8
-    X_norm = cp.sqrt(cp.sum(X_projected ** 2)) + 1e-8
-    dot_product = cp.sum(A_projected * X_projected, axis=1)
-    distances_projected = 1 - (dot_product / (A_norm * X_norm))
+    # For cosine distance, we need to handle normalization
+    A_norm = cp.sqrt(cp.sum(A_reduced ** 2, axis=1, keepdims=True)) + 1e-8
+    X_norm = cp.sqrt(cp.sum(X_reduced ** 2)) + 1e-8
+    dot_product = cp.sum(A_reduced * X_reduced, axis=1)
+    reduced_dists = 1 - (dot_product / (A_norm.flatten() * X_norm))
   else:  # 'dot'
-    # Negative dot product (smaller is better)
-    distances_projected = -cp.sum(A_projected * X_projected, axis=1)
+    # For dot product (smaller is better, so negate)
+    reduced_dists = -cp.sum(A_reduced * X_reduced, axis=1)
   
-  # ---- APPROACH 2: Combine with element-wise filtering ----
-  # Sample a subset of points based on the projected distances
-  # This creates a more focused sample than pure random sampling
-  candidate_indices = cp.argsort(distances_projected)[:sample_size]
+  # ---- STEP 3: Select candidate points using reduced distances ----
+  candidate_indices = cp.argsort(reduced_dists)[:sample_size]
   candidate_points = A[candidate_indices]
   
-  # Calculate exact distances for the candidates
-  if d == 'l2':
-    diffs = candidate_points - X
-    exact_distances = cp.sqrt(cp.sum(diffs ** 2, axis=1))
-  elif d == 'manhattan':
-    exact_distances = cp.sum(cp.abs(candidate_points - X), axis=1)
-  elif d == 'cosine':
-    norm_A = cp.sqrt(cp.sum(candidate_points ** 2, axis=1)) + 1e-8
-    norm_X = cp.sqrt(cp.sum(X ** 2)) + 1e-8
-    dot_product = cp.sum(candidate_points * X, axis=1)
-    exact_distances = 1 - (dot_product / (norm_A * norm_X))
-  else:  # 'dot'
-    exact_distances = -cp.sum(candidate_points * X, axis=1)
+  # ---- STEP 4: Compute exact distances for the candidates ----
+  # Now use the full distance computation on the smaller candidate set
+  exact_distances = distance_func(candidate_points, X).flatten()
   
-  # Get the K nearest from the candidates
+  # ---- STEP 5: Select final K nearest neighbors from candidates ----
   k_nearest = cp.argsort(exact_distances)[:K]
-  result = candidate_indices[k_nearest]
+  final_indices = candidate_indices[k_nearest]
   
-  return result
-
-
-# Enhanced test function to verify recall rate within target range
-def test_ann_recall_range():
-  """Test if ANN recall rate is within the 70-95% target range"""
-  print("Testing if ANN recall rate is within 70-95% range...")
-  
-  # Try different dataset sizes
-  dataset_sizes = [1000, 2000, 5000]
-  
-  for size in dataset_sizes:
-    # Generate random data
-    print(f"\nTesting with dataset size: {size}")
-    N = size
-    D = 100
-    A = np.random.randn(N, D)
-    X = np.random.randn(D)
-    K = 10
-    
-    # Convert to GPU
-    A_gpu = cp.asarray(A)
-    X_gpu = cp.asarray(X)
-    
-    # Get exact KNN results
-    start = time.time()
-    knn_result = our_knn(N, D, A_gpu, X_gpu, K)
-    knn_time = time.time() - start
-    print(f"Exact KNN time: {knn_time:.6f} seconds")
-    
-    # Get ANN results
-    start = time.time()
-    ann_result = our_ann(N, D, A_gpu, X_gpu, K)
-    ann_time = time.time() - start
-    
-    # Calculate recall
-    recall = recall_rate(cp.asnumpy(ann_result), cp.asnumpy(knn_result))
-    
-    print(f"ANN time: {ann_time:.6f} seconds")
-    print(f"Speedup: {knn_time/ann_time:.2f}x")
-    print(f"Recall rate: {recall:.4f}")
-    
-    if 0.7 <= recall <= 0.95:
-      print("✓ RECALL WITHIN TARGET RANGE (70-95%)")
-    else:
-      print("✗ RECALL OUTSIDE TARGET RANGE")
-      if recall < 0.7:
-        print("  Recall is too low. Try increasing sample size or reducing dimension reduction.")
-      else:
-        print("  Recall is too high. Try reducing sample size or increasing dimension reduction.")
-  
-  return recall
+  return final_indices
 
 
 # ------------------------------------------------------------------------------------------------

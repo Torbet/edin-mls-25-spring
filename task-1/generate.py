@@ -3,24 +3,30 @@ import json
 
 np.random.seed(0)
 
-N = int(100000 * 1.5)
-D = 512 * 2
-K = 10
 
-A = np.random.randn(N, D)
-X = np.random.randn(D)
+def generate_knn(i=1, ratio=64):
+  D = 2**i
+  N = D * ratio
+  K = 10
 
-A_filename = f'data/A_{N}x{D}.txt'
-X_filename = f'data/X_{D}.txt'
-config_filename = f'data/test_config_{N}x{D}.json'
+  A = np.random.randn(N, D)
+  X = np.random.randn(D)
 
-np.savetxt(A_filename, A)
-np.savetxt(X_filename, X)
+  A_filename = f'data/knn_A_{i}.txt'
+  X_filename = f'data/knn_X_{i}.txt'
+  config_filename = f'data/knn_{i}.json'
 
-config = {'n': N, 'd': D, 'a_file': A_filename, 'x_file': X_filename, 'k': K}
+  np.savetxt(A_filename, A)
+  np.savetxt(X_filename, X)
 
-with open(config_filename, 'w') as f:
-  json.dump(config, f, indent=2)
+  config = {'n': N, 'd': D, 'a_file': A_filename, 'x_file': X_filename, 'k': K}
 
-print('Data files and configuration created.')
-print(config_filename)
+  with open(config_filename, 'w') as f:
+    json.dump(config, f, indent=2)
+
+  print('Data files and configuration created.')
+  print(config_filename)
+
+
+if __name__ == '__main__':
+  generate_knn(10)

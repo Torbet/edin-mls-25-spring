@@ -307,8 +307,6 @@ def test_knn(i=1, distance='l2'):
 
   print()
 
-  its = 10
-
   a, x = np.asarray(A), np.asarray(X)
   t, result = timeit(np_knn, N, D, a, x, K, distance)
   results['numpy'] = t
@@ -316,6 +314,10 @@ def test_knn(i=1, distance='l2'):
   print('KNN Result (Numpy CPU):', result)
 
   print()
+
+  cp.get_default_memory_pool().free_all_blocks()
+  cp.get_default_pinned_memory_pool().free_all_blocks()
+  cp.cuda.Stream.null.synchronize()
 
   a, x = cp.asarray(A), cp.asarray(X)
   t, result = timeit(cp_knn, N, D, a, x, K, distance)
@@ -325,6 +327,10 @@ def test_knn(i=1, distance='l2'):
 
   print()
 
+  cp.get_default_memory_pool().free_all_blocks()
+  cp.get_default_pinned_memory_pool().free_all_blocks()
+  cp.cuda.Stream.null.synchronize()
+
   a, x = cp.asarray(A, dtype=cp.float32), cp.asarray(X, dtype=cp.float32).reshape(1, -1)
   t, result = timeit(kernel_knn, N, D, a, x, K, distance)
   results['kernel'] = t
@@ -332,6 +338,12 @@ def test_knn(i=1, distance='l2'):
   print('KNN Result (Kernel GPU):', result)
 
   print()
+  cp.get_default_memory_pool().free_all_blocks()
+  cp.get_default_pinned_memory_pool().free_all_blocks()
+  cp.cuda.Stream.null.synchronize()
+
+  torch.cuda.empty_cache()
+  torch.cuda.synchronize()
 
   a, x = torch.tensor(A).to('cpu'), torch.tensor(X).to('cpu')
   t, result = timeit(torch_knn, N, D, a, x, K, distance)
@@ -340,6 +352,9 @@ def test_knn(i=1, distance='l2'):
   print('KNN Result (torch CPU):', result.tolist())
 
   print()
+
+  torch.cuda.empty_cache()
+  torch.cuda.synchronize()
 
   a, x = torch.tensor(A).to('cuda'), torch.tensor(X).to('cuda')
   t, result = timeit(torch_knn, N, D, a, x, K, distance)
@@ -381,7 +396,7 @@ def recall_rate(list1, list2):
 
 
 if __name__ == '__main__':
-  distance = 'l2_batch'
+  distance = 'l2'
   results = {}
   for i in range(1, 12):
     results[i] = test_knn(i)

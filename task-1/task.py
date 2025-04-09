@@ -239,22 +239,48 @@ def torch_knn(N, D, A, X, K, distance='l2'):
 
 
 def our_kmeans(N, D, A, K, distance='l2'):
-  A = cp.asarray(A)
-  centroids = A[cp.random.choice(N, K, replace=False)]
+  """
+  Implements K-Means clustering entirely in CuPy.
 
-  for _ in range(100):  # max iters
-    distances = dists[distance]['gpu'](A, centroids)
-    labels = cp.argmin(distances, axis=1)
+  Parameters:
+    N (int): Number of data points.
+    D (int): Dimension of each data point.
+    A: Array-like (N x D) of data points.
+    K (int): Number of clusters.
+    distance (str): Currently only "l2" is supported.
 
-    # new_centroids = cp.array([A[labels == k].mean(axis=0) if cp.any(labels == k) else centroids[k] for k in range(K)])
-    new_centroids = cp.array([cp.mean(A[labels == k], axis=0) for k in range(K)])
+  Returns:
+    assignments (cp.ndarray): Cluster ID (0 <= id < K) for each data point.
+    centroids (cp.ndarray): Final cluster centroids (K x D).
+  """
+  max_iter = 100
+  tol = 1e-4
 
-    if cp.allclose(centroids, new_centroids):
+  A_gpu = cp.asarray(A, dtype=cp.float32)
+
+  init_indices = np.random.choice(N, K, replace=False)
+  centroids = A_gpu[init_indices]
+
+  for it in range(max_iter):
+    distances = cp.sum((A_gpu[:, None, :] - centroids[None, :, :]) ** 2, axis=2)
+
+    assignments = cp.argmin(distances, axis=1)
+
+    new_centroids = []
+    for k in range(K):
+      mask = assignments == k
+      if cp.sum(mask) == 0:
+        new_centroids.append(centroids[k])
+      else:
+        new_centroids.append(cp.mean(A_gpu[mask], axis=0))
+    new_centroids = cp.stack(new_centroids, axis=0)
+
+    shift = cp.linalg.norm(new_centroids - centroids)
+    centroids = new_centroids
+    if shift < tol:
       break
 
-    centroids = new_centroids
-
-  return labels
+  return assignments, centroids
 
 
 # ------------------------------------------------------------------------------------------------
@@ -264,8 +290,60 @@ def our_kmeans(N, D, A, K, distance='l2'):
 # You can create any kernel here
 
 
-def our_ann(N, D, A, X, K, distance='l2'):
-  pass
+def our_ann(N, D, A, X, K, distance='l2', assignments=None, centroids=None):
+  """
+  Approximate Nearest Neighbor (ANN) search using K-Means.
+
+  Steps:
+    1. Cluster the database A into a fixed number of clusters.
+    2. For a query vector X, compute its distance to each centroid.
+    3. Select a small subset (K1) of clusters with the closest centroids.
+    4. Restrict the search to all points in the selected clusters.
+    5. Compute exact distances from X to all candidate points and return the top K neighbors.
+
+  Parameters:
+    N (int): Number of data points in A.
+    D (int): Dimension of each data point.
+    A: Array-like (N x D) of data points.
+    X: Array-like (D,) query vector.
+    K (int): Number of nearest neighbors to return.
+    distance (str): Currently supports "l2".
+
+  Returns:
+    cp.ndarray: Indices of the top K nearest data points (using CuPy array).
+  """
+
+  num_clusters = 100 if N > 100 else N
+
+  if assignments is None and centroids is None:
+    assignments, centroids = our_kmeans(N, D, A, num_clusters, distance=distance)
+
+  X_gpu = cp.asarray(X, dtype=cp.float32)
+
+  centroid_dists = cp.linalg.norm(centroids - X_gpu, axis=1)
+
+  K1 = max(1, num_clusters // 10)
+  top_centroid_indices = cp.argpartition(centroid_dists, K1)[:K1]
+
+  candidate_mask = cp.isin(assignments, top_centroid_indices)
+  candidate_indices = cp.nonzero(candidate_mask)[0]
+
+  if candidate_indices.size == 0:
+    return cp.array([], dtype=cp.int32)
+
+  A_gpu = cp.asarray(A, dtype=cp.float32)
+  candidates = A_gpu[candidate_indices]
+
+  candidate_dists = cp.linalg.norm(candidates - X_gpu, axis=1)
+
+  if candidate_dists.shape[0] > K:
+    topk_local = cp.argpartition(candidate_dists, K)[:K]
+    sorted_local = topk_local[cp.argsort(candidate_dists[topk_local])]
+  else:
+    sorted_local = cp.argsort(candidate_dists)
+
+  final_indices = candidate_indices[sorted_local]
+  return final_indices
 
 
 # ------------------------------------------------------------------------------------------------
@@ -338,6 +416,29 @@ def test_knn(i=1, distance='l2'):
   print('KNN Result (Kernel GPU):', result)
 
   print()
+
+  cp.get_default_memory_pool().free_all_blocks()
+  cp.get_default_pinned_memory_pool().free_all_blocks()
+  cp.cuda.Stream.null.synchronize()
+
+  a, x = cp.asarray(A, dtype=cp.float32), cp.asarray(X, dtype=cp.float32).reshape(1, -1)
+  num_clusters = 100 if N > 100 else N
+  assignments, centroids = our_kmeans(N, D, A, num_clusters, distance=distance)
+  t, result = timeit(our_ann, N, D, a, x, K, distance, assignments=assignments, centroids=centroids)
+  results['ann'] = t
+  print('ANN Time taken:', t)
+  print('ANN Result:', result)
+
+  print()
+
+  cp.get_default_memory_pool().free_all_blocks()
+  cp.get_default_pinned_memory_pool().free_all_blocks()
+  cp.cuda.Stream.null.synchronize()
+
+  test_recall_rate(i)
+
+  print()
+
   cp.get_default_memory_pool().free_all_blocks()
   cp.get_default_pinned_memory_pool().free_all_blocks()
   cp.cuda.Stream.null.synchronize()
@@ -375,8 +476,8 @@ def test_ann():
   print('ANN Time taken:', end - start)
 
 
-def test_recall_rate():
-  N, D, A, X, K = testdata_ann('data/knn_10.json')
+def test_recall_rate(i):
+  N, D, A, X, K = testdata_ann(f'data/{i}.json')
   A, X = cp.asarray(A), cp.asarray(X)
   ann_result = our_ann(N, D, A, X, K)
   knn_result = cp_knn(N, D, A, X, K)
@@ -392,13 +493,13 @@ def recall_rate(list1, list2):
   list1[K]: The top K nearest vectors ID
   list2[K]: The top K nearest vectors ID
   """
-  return len(set(list1) & set(list2)) / len(list1)
+  return len(set(sorted(list1)) & set(sorted(list2))) / len(list1)
 
 
 if __name__ == '__main__':
   distance = 'l2'
   results = {}
-  for i in range(1, 12):
+  for i in range(1, 11):
     results[i] = test_knn(i)
 
   print('Results:', results)

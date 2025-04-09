@@ -24,32 +24,45 @@ torch.cuda.manual_seed_all(0)
 #     pass
 
 
+# normalized (cp.linalg.norm)
 def distance_cosine(X, Y):
-  X_norm = cp.linalg.norm(X, axis=1, keepdims=True) + 1e-8
-  Y_norm = cp.linalg.norm(Y, axis=1, keepdims=True) + 1e-8
-  dot_product = cp.dot(X, Y.T)
-  cosine_similarity = dot_product / (X_norm * Y_norm.T)
-  return 1 - cosine_similarity
+  X_norm = cp.linalg.norm(X, axis=1, keepdims=True)
+  Y_norm = cp.linalg.norm(Y, axis=1, keepdims=True)
+  X_normalized = X / (X_norm + 1e-8)
+  Y_normalized = Y / (Y_norm + 1e-8)
+  dot_product = cp.dot(X_normalized, Y_normalized.T)
+  return 1 - dot_product
 
 
 def distance_cosine_np(X, Y):
-  X_norm = np.linalg.norm(X, axis=1, keepdims=True) + 1e-8
-  Y_norm = np.linalg.norm(Y, axis=1, keepdims=True) + 1e-8
-  dot_product = np.dot(X, Y.T)
-  cosine_similarity = dot_product / (X_norm * Y_norm.T)
-  return 1 - cosine_similarity
+  X_norm = np.linalg.norm(X, axis=1, keepdims=True)
+  Y_norm = np.linalg.norm(Y, axis=1, keepdims=True)
+  X_normalized = X / (X_norm + 1e-8)
+  Y_normalized = Y / (Y_norm + 1e-8)
+  dot_product = np.dot(X_normalized, Y_normalized.T)
+  return 1 - dot_product
 
 
 def distance_cosine_torch(X, Y):
-  X_norm = torch.norm(X, dim=1, keepdim=True) + 1e-8
-  Y_norm = torch.norm(Y, dim=1, keepdim=True) + 1e-8
-  dot_product = torch.mm(X, Y.T)
-  cosine_similarity = dot_product / (X_norm * Y_norm.T)
-  return 1 - cosine_similarity
+  X_norm = torch.norm(X, dim=1, keepdim=True)
+  Y_norm = torch.norm(Y, dim=1, keepdim=True)
+  X_normalized = X / (X_norm + 1e-8)
+  Y_normalized = Y / (Y_norm + 1e-8)
+  dot_product = torch.mm(X_normalized, Y_normalized.T)
+  return 1 - dot_product
 
 
 def distance_l2(X, Y):
   return cp.sqrt(cp.sum((X[:, None] - Y) ** 2, axis=2))
+
+
+def distance_l2_batch(A, X, batch_size=1024):
+  N, D = A.shape
+  result = cp.empty((N, 1), dtype=cp.float32)
+  for i in range(0, N, batch_size):
+    A_batch = A[i : i + batch_size]
+    result[i : i + batch_size] = cp.sqrt(cp.sum((A_batch[:, None] - X) ** 2, axis=2))
+  return result
 
 
 def distance_l2_np(X, Y):
@@ -86,6 +99,7 @@ def distance_manhattan_torch(X, Y):
 
 dists = {
   'l2': {'cpu': distance_l2_np, 'gpu': distance_l2, 'torch': distance_l2_torch},
+  'l2_batch': {'cpu': distance_l2_np, 'gpu': distance_l2_batch, 'torch': distance_l2_torch},
   'cosine': {'cpu': distance_cosine_np, 'gpu': distance_cosine, 'torch': distance_cosine_torch},
   'dot': {'cpu': distance_dot_np, 'gpu': distance_dot, 'torch': distance_dot_torch},
   'manhattan': {'cpu': distance_manhattan_np, 'gpu': distance_manhattan, 'torch': distance_manhattan_torch},
@@ -160,7 +174,7 @@ void topk_small(const float* distances, int* indices, int N, int K) {
 )
 
 
-def our_knn_topk_kernel(N, D, A, X, K, distance='l2'):
+def kernel_knn(N, D, A, X, K, distance='l2'):
   distances = dists[distance]['gpu'](A, X).flatten()
 
   threads = 1024
@@ -186,7 +200,7 @@ def our_knn_topk_kernel(N, D, A, X, K, distance='l2'):
   return final_indices
 
 
-def our_knn(N, D, A, X, K, distance='l2'):
+def cp_knn(N, D, A, X, K, distance='l2'):
   X = X.reshape(1, -1)
 
   distances = dists[distance]['gpu'](A, X).flatten()
@@ -250,72 +264,8 @@ def our_kmeans(N, D, A, K, distance='l2'):
 # You can create any kernel here
 
 
-def our_ann(N, D, A, X, K, d='l2'):
-  """
-  Optimized Approximate Nearest Neighbors implementation
-  calibrated to achieve 70-95% recall rate with good speed.
-  
-  Uses the optimal parameters:
-  - Sample ratio: 25% of data (max 250 points)
-  - Projection ratio: 30% of dimensions (max 30 dimensions)
-  
-  Args:
-    N: Number of data points
-    D: Dimensionality of data
-    A: Dataset as an array (N x D)
-    X: Query point (D)
-    K: Number of neighbors to find
-    d: Distance metric ('l2', 'cosine', 'manhattan', 'dot')
-  
-  Returns:
-    Array of indices of the K approximate nearest neighbors
-  """
-  # Make sure X is properly shaped
-  X = X.reshape(1, -1)
-  
-  # Use the optimal parameters found through tuning
-  sample_size = min(250, int(N * 0.25))      # 25% of data or 250 points max
-  projection_dim = min(30, int(D * 0.30))    # 30% of dimensions or 30 max
-  
-  # ---- STEP 1: Project to lower dimension ----
-  # Select a subset of dimensions for faster initial filtering
-  projection_dims = cp.random.choice(D, projection_dim, replace=False)
-  
-  # Extract the reduced representations
-  A_reduced = A[:, projection_dims]
-  X_reduced = X[:, projection_dims]
-  
-  # ---- STEP 2: Compute approximate distances in reduced space ----
-  # Get the appropriate distance function from the dists dictionary
-  distance_func = dists[d]['gpu']
-  
-  # Handle distances differently based on the metric
-  if d in ['l2', 'manhattan']:
-    # For L2 and Manhattan, we can use the function on reduced dimensions
-    reduced_dists = distance_func(A_reduced, X_reduced).flatten()
-  elif d == 'cosine':
-    # For cosine distance, we need to handle normalization
-    A_norm = cp.sqrt(cp.sum(A_reduced ** 2, axis=1, keepdims=True)) + 1e-8
-    X_norm = cp.sqrt(cp.sum(X_reduced ** 2)) + 1e-8
-    dot_product = cp.sum(A_reduced * X_reduced, axis=1)
-    reduced_dists = 1 - (dot_product / (A_norm.flatten() * X_norm))
-  else:  # 'dot'
-    # For dot product (smaller is better, so negate)
-    reduced_dists = -cp.sum(A_reduced * X_reduced, axis=1)
-  
-  # ---- STEP 3: Select candidate points using reduced distances ----
-  candidate_indices = cp.argsort(reduced_dists)[:sample_size]
-  candidate_points = A[candidate_indices]
-  
-  # ---- STEP 4: Compute exact distances for the candidates ----
-  # Now use the full distance computation on the smaller candidate set
-  exact_distances = distance_func(candidate_points, X).flatten()
-  
-  # ---- STEP 5: Select final K nearest neighbors from candidates ----
-  k_nearest = cp.argsort(exact_distances)[:K]
-  final_indices = candidate_indices[k_nearest]
-  
-  return final_indices
+def our_ann(N, D, A, X, K, distance='l2'):
+  pass
 
 
 # ------------------------------------------------------------------------------------------------
@@ -324,6 +274,18 @@ def our_ann(N, D, A, X, K, d='l2'):
 
 
 # Example
+
+
+def timeit(func, *args, **kwargs):
+  its = 10
+  times = []
+  for i in range(its):
+    start = time.time()
+    result = func(*args, **kwargs)
+    end = time.time()
+    times.append(end - start)
+  t = np.mean(times)
+  return t, result
 
 
 def test_kmeans(distance='l2'):
@@ -335,7 +297,7 @@ def test_kmeans(distance='l2'):
 
 
 def test_knn(i=1, distance='l2'):
-  N, D, A, X, K = testdata_knn(f'data/knn_{i}.json')
+  N, D, A, X, K = testdata_knn(f'data/{i}.json')
 
   results = {}
 
@@ -348,13 +310,7 @@ def test_knn(i=1, distance='l2'):
   its = 10
 
   a, x = np.asarray(A), np.asarray(X)
-  times = []
-  for i in range(its):
-    start = time.time()
-    result = np_knn(N, D, a, x, K, distance)
-    end = time.time()
-    times.append(end - start)
-  t = np.mean(times)
+  t, result = timeit(np_knn, N, D, a, x, K, distance)
   results['numpy'] = t
   print('KNN Time taken (Numpy CPU):', t)
   print('KNN Result (Numpy CPU):', result)
@@ -362,42 +318,23 @@ def test_knn(i=1, distance='l2'):
   print()
 
   a, x = cp.asarray(A), cp.asarray(X)
-  times = []
-  for i in range(its):
-    start = time.time()
-    result = our_knn(N, D, a, x, K, distance)
-    end = time.time()
-    times.append(end - start)
-  t = np.mean(times)
+  t, result = timeit(cp_knn, N, D, a, x, K, distance)
   results['cupy'] = t
   print('KNN Time taken (Cupy GPU):', t)
   print('KNN Result (Cupy GPU):', result)
 
   print()
 
-  a = cp.asarray(A, dtype=cp.float32)
-  x = cp.asarray(X, dtype=cp.float32).reshape(1, -1)
-  times = []
-  for i in range(its):
-    start = time.time()
-    result = our_knn_topk_kernel(N, D, a, x, K, distance)
-    end = time.time()
-    times.append(end - start)
-  t = np.mean(times)
-  results['cupy_kernel'] = t
-  print('KNN Time taken (Cupy Kernel GPU):', t)
-  print('KNN Result (Cupy Kernel GPU):', result)
+  a, x = cp.asarray(A, dtype=cp.float32), cp.asarray(X, dtype=cp.float32).reshape(1, -1)
+  t, result = timeit(kernel_knn, N, D, a, x, K, distance)
+  results['kernel'] = t
+  print('KNN Time taken (Kernel GPU):', t)
+  print('KNN Result (Kernel GPU):', result)
 
   print()
 
   a, x = torch.tensor(A).to('cpu'), torch.tensor(X).to('cpu')
-  times = []
-  for i in range(its):
-    start = time.time()
-    result = torch_knn(N, D, a, x, K, distance)
-    end = time.time()
-    times.append(end - start)
-  t = np.mean(times)
+  t, result = timeit(torch_knn, N, D, a, x, K, distance)
   results['torch_cpu'] = t
   print('KNN Time taken (Torch CPU):', t)
   print('KNN Result (torch CPU):', result.tolist())
@@ -405,13 +342,7 @@ def test_knn(i=1, distance='l2'):
   print()
 
   a, x = torch.tensor(A).to('cuda'), torch.tensor(X).to('cuda')
-  times = []
-  for i in range(its):
-    start = time.time()
-    result = torch_knn(N, D, a, x, K, distance)
-    end = time.time()
-    times.append(end - start)
-  t = np.mean(times)
+  t, result = timeit(torch_knn, N, D, a, x, K, distance)
   results['torch_gpu'] = t
   print('KNN Time taken (Torch GPU):', t)
   print('KNN Result (torch GPU):', result.tolist())
@@ -433,7 +364,7 @@ def test_recall_rate():
   N, D, A, X, K = testdata_ann('data/knn_10.json')
   A, X = cp.asarray(A), cp.asarray(X)
   ann_result = our_ann(N, D, A, X, K)
-  knn_result = our_knn(N, D, A, X, K)
+  knn_result = cp_knn(N, D, A, X, K)
   # to numpy
   ann_result = cp.asnumpy(ann_result)
   knn_result = cp.asnumpy(knn_result)
@@ -450,9 +381,9 @@ def recall_rate(list1, list2):
 
 
 if __name__ == '__main__':
-  distance = 'l2'
+  distance = 'l2_batch'
   results = {}
-  for i in range(1, 11):
+  for i in range(1, 12):
     results[i] = test_knn(i)
 
   print('Results:', results)

@@ -4,7 +4,7 @@ import json
 np.random.seed(0)
 
 
-def generate_knn(i=1, ratio=64):
+def generate(i=1, ratio=64):
   D = 2**i
   N = D * ratio
   K = 10
@@ -12,9 +12,9 @@ def generate_knn(i=1, ratio=64):
   A = np.random.randn(N, D)
   X = np.random.randn(D)
 
-  A_filename = f'data/knn_A_{i}.txt'
-  X_filename = f'data/knn_X_{i}.txt'
-  config_filename = f'data/knn_{i}.json'
+  A_filename = f'data/A_{i}.txt'
+  X_filename = f'data/X_{i}.txt'
+  config_filename = f'data/{i}.json'
 
   np.savetxt(A_filename, A)
   np.savetxt(X_filename, X)
@@ -29,4 +29,5 @@ def generate_knn(i=1, ratio=64):
 
 
 if __name__ == '__main__':
-  generate_knn(10)
+  for i in range(1, 12):
+    generate(i)

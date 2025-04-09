@@ -290,11 +290,9 @@ def our_ann(N, D, A, X, K, distance='l2', assignments=None, centroids=None):
 
   cluster_center_indices = cp_knn(centroids.shape[0], D, centroids, X, K1, distance)
 
-  cluster_center_indices_cpu = cp.asnumpy(cluster_center_indices)
-
   candidate_indices_list = []
 
-  for cid in cluster_center_indices_cpu:
+  for cid in cluster_center_indices:
     cluster_mask = assignments == cid
     member_indices = cp.nonzero(cluster_mask)[0]
     if member_indices.size == 0:
@@ -372,7 +370,7 @@ def test_knn(i=1, distance='l2'):
   cp.cuda.Stream.null.synchronize()
 
   a, x = cp.asarray(A), cp.asarray(X)
-  t, result = timeit(cp_knn, N, D, a, x, K, distance)
+  t, knn_result = timeit(cp_knn, N, D, a, x, K, distance)
   results['cupy'] = t
   print('KNN Time taken (Cupy GPU):', t)
   print('KNN Result (Cupy GPU):', result)
@@ -398,7 +396,7 @@ def test_knn(i=1, distance='l2'):
   a, x = cp.asarray(A, dtype=cp.float32), cp.asarray(X, dtype=cp.float32).reshape(1, -1)
   num_clusters = 100 if N > 100 else N
   assignments, centroids = our_kmeans(N, D, A, num_clusters, distance=distance)
-  t, result = timeit(our_ann, N, D, a, x, K, distance, assignments=assignments, centroids=centroids)
+  t, ann_result = timeit(our_ann, N, D, a, x, K, distance, assignments=assignments, centroids=centroids)
   results['ann'] = t
   print('ANN Time taken:', t)
   print('ANN Result:', result)
@@ -409,7 +407,11 @@ def test_knn(i=1, distance='l2'):
   cp.get_default_pinned_memory_pool().free_all_blocks()
   cp.cuda.Stream.null.synchronize()
 
-  test_recall_rate(i)
+  ann_result = cp.asnumpy(ann_result)
+  knn_result = cp.asnumpy(knn_result)
+  rr = recall_rate(ann_result, knn_result)
+  print('Recall rate:', rr)
+  results['recall_rate'] = rr
 
   print()
 
@@ -471,12 +473,14 @@ def recall_rate(list1, list2):
 
 
 if __name__ == '__main__':
-  distance = 'dot'
-  results = {}
-  for i in range(1, 11):
-    results[i] = test_knn(i)
+  # distance = 'dot'
 
-  print('Results:', results)
-  df = pd.DataFrame.from_dict(results, orient='index')
-  df.to_csv(f'results_{distance}.csv', index=True, header=True)
-  print(f'Results saved to results_{distance}.csv')
+  for distance in ['dot']:
+    results = {}
+    for i in range(1, 11):
+      results[i] = test_knn(i)
+
+    print('Results:', results)
+    df = pd.DataFrame.from_dict(results, orient='index')
+    df.to_csv(f'results_{distance}.csv', index=True, header=True)
+    print(f'Results saved to results_{distance}.csv')

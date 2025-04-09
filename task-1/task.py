@@ -8,23 +8,13 @@ import csv
 import pandas as pd
 from test import testdata_kmeans, testdata_knn, testdata_ann
 
-
 np.random.seed(0)
 cp.random.seed(0)
 torch.manual_seed(0)
 torch.cuda.manual_seed(0)
 torch.cuda.manual_seed_all(0)
 
-# ------------------------------------------------------------------------------------------------
-# Your Task 1.1 code here
-# ------------------------------------------------------------------------------------------------
 
-# You can create any kernel here
-# def distance_kernel(X, Y, D):
-#     pass
-
-
-# normalized (cp.linalg.norm)
 def distance_cosine(X, Y):
   X_norm = cp.linalg.norm(X, axis=1, keepdims=True)
   Y_norm = cp.linalg.norm(Y, axis=1, keepdims=True)
@@ -104,13 +94,6 @@ dists = {
   'dot': {'cpu': distance_dot_np, 'gpu': distance_dot, 'torch': distance_dot_torch},
   'manhattan': {'cpu': distance_manhattan_np, 'gpu': distance_manhattan, 'torch': distance_manhattan_torch},
 }
-
-
-# ------------------------------------------------------------------------------------------------
-# Your Task 1.2 code here
-# ------------------------------------------------------------------------------------------------
-
-# You can create any kernel here
 
 topk_kernel = cp.RawKernel(
   r"""
@@ -229,18 +212,9 @@ def torch_knn(N, D, A, X, K, distance='l2'):
   return indices
 
 
-# ------------------------------------------------------------------------------------------------
-# Your Task 2.1 code here
-# ------------------------------------------------------------------------------------------------
-
-# You can create any kernel here
-# def distance_kernel(X, Y, D):
-#     pass
-
-
-def our_kmeans(N, D, A, K, distance='l2'):
+def our_kmeans(N, D, A, K, distance='l2', batch_size=1024):
   """
-  Implements K-Means clustering entirely in CuPy.
+  Implements K-Means clustering entirely in CuPy with batching.
 
   Parameters:
     N (int): Number of data points.
@@ -248,6 +222,7 @@ def our_kmeans(N, D, A, K, distance='l2'):
     A: Array-like (N x D) of data points.
     K (int): Number of clusters.
     distance (str): Currently only "l2" is supported.
+    batch_size (int): Size of batches to compute distances.
 
   Returns:
     assignments (cp.ndarray): Cluster ID (0 <= id < K) for each data point.
@@ -257,14 +232,17 @@ def our_kmeans(N, D, A, K, distance='l2'):
   tol = 1e-4
 
   A_gpu = cp.asarray(A, dtype=cp.float32)
-
   init_indices = np.random.choice(N, K, replace=False)
   centroids = A_gpu[init_indices]
 
   for it in range(max_iter):
-    distances = cp.sum((A_gpu[:, None, :] - centroids[None, :, :]) ** 2, axis=2)
+    assignments = cp.empty((N,), dtype=cp.int32)
 
-    assignments = cp.argmin(distances, axis=1)
+    for i in range(0, N, batch_size):
+      A_batch = A_gpu[i : i + batch_size]
+
+      dists = cp.sum((A_batch[:, None, :] - centroids[None, :, :]) ** 2, axis=2)
+      assignments[i : i + batch_size] = cp.argmin(dists, axis=1)
 
     new_centroids = []
     for k in range(K):
@@ -283,75 +261,71 @@ def our_kmeans(N, D, A, K, distance='l2'):
   return assignments, centroids
 
 
-# ------------------------------------------------------------------------------------------------
-# Your Task 2.2 code here
-# ------------------------------------------------------------------------------------------------
-
-# You can create any kernel here
-
-
 def our_ann(N, D, A, X, K, distance='l2', assignments=None, centroids=None):
   """
-  Approximate Nearest Neighbor (ANN) search using K-Means.
-
-  Steps:
-    1. Cluster the database A into a fixed number of clusters.
-    2. For a query vector X, compute its distance to each centroid.
-    3. Select a small subset (K1) of clusters with the closest centroids.
-    4. Restrict the search to all points in the selected clusters.
-    5. Compute exact distances from X to all candidate points and return the top K neighbors.
+  1. Cluster A into K clusters using KMeans.
+  2. For the query X, find the nearest K1 cluster centers.
+  3. For each selected cluster, retrieve up to K2 candidate neighbors.
+  4. Merge candidates and use cp_knn (or cp.argsort when needed) to select the final top K neighbors.
 
   Parameters:
-    N (int): Number of data points in A.
-    D (int): Dimension of each data point.
-    A: Array-like (N x D) of data points.
-    X: Array-like (D,) query vector.
-    K (int): Number of nearest neighbors to return.
-    distance (str): Currently supports "l2".
+    N (int): Number of data points.
+    D (int): Dimensionality of each data point.
+    A (cp.ndarray): Dataset (N x D).
+    X (cp.ndarray): Query vector.
+    K (int): Used for both the number of clusters in KMeans and the number of final neighbors.
+    distance (str): Distance metric key ('l2', 'dot', etc.).
+    assignments (cp.ndarray, optional): Pre-computed cluster labels for A.
+    centroids (cp.ndarray, optional): Pre-computed cluster centers.
 
   Returns:
-    cp.ndarray: Indices of the top K nearest data points (using CuPy array).
+    cp.ndarray: Global indices (into A) of the final top K nearest neighbors.
   """
 
-  num_clusters = 100 if N > 100 else N
+  if assignments is None or centroids is None:
+    assignments, centroids = our_kmeans(N, D, A, K, distance)
 
-  if assignments is None and centroids is None:
-    assignments, centroids = our_kmeans(N, D, A, num_clusters, distance=distance)
+  K1 = min(5, centroids.shape[0])
+  K2 = 10
 
-  X_gpu = cp.asarray(X, dtype=cp.float32)
+  cluster_center_indices = cp_knn(centroids.shape[0], D, centroids, X, K1, distance)
 
-  centroid_dists = cp.linalg.norm(centroids - X_gpu, axis=1)
+  cluster_center_indices_cpu = cp.asnumpy(cluster_center_indices)
 
-  K1 = max(1, num_clusters // 10)
-  top_centroid_indices = cp.argpartition(centroid_dists, K1)[:K1]
+  candidate_indices_list = []
 
-  candidate_mask = cp.isin(assignments, top_centroid_indices)
-  candidate_indices = cp.nonzero(candidate_mask)[0]
+  for cid in cluster_center_indices_cpu:
+    cluster_mask = assignments == cid
+    member_indices = cp.nonzero(cluster_mask)[0]
+    if member_indices.size == 0:
+      continue
 
-  if candidate_indices.size == 0:
-    return cp.array([], dtype=cp.int32)
+    A_subset = A[member_indices]
+    M = A_subset.shape[0]
 
-  A_gpu = cp.asarray(A, dtype=cp.float32)
-  candidates = A_gpu[candidate_indices]
+    current_K2 = min(K2, M)
+    if M <= current_K2:
+      dists_subset = dists[distance]['gpu'](A_subset, X).flatten()
+      candidate_local_indices = cp.argsort(dists_subset)
+    else:
+      candidate_local_indices = cp_knn(M, D, A_subset, X, current_K2, distance)
 
-  candidate_dists = cp.linalg.norm(candidates - X_gpu, axis=1)
+    candidates_global = member_indices[candidate_local_indices]
+    candidate_indices_list.append(candidates_global)
 
-  if candidate_dists.shape[0] > K:
-    topk_local = cp.argpartition(candidate_dists, K)[:K]
-    sorted_local = topk_local[cp.argsort(candidate_dists[topk_local])]
+  if len(candidate_indices_list) == 0:
+    return cp.empty((0,), dtype=cp.int32)
+
+  candidate_indices = cp.concatenate(candidate_indices_list)
+  candidates = A[candidate_indices]
+
+  if candidates.shape[0] <= K:
+    final_order = cp.argsort(dists[distance]['gpu'](candidates, X).flatten())
   else:
-    sorted_local = cp.argsort(candidate_dists)
+    final_order = cp_knn(candidates.shape[0], D, candidates, X, K, distance)
+  final_global_indices = candidate_indices[final_order]
 
-  final_indices = candidate_indices[sorted_local]
-  return final_indices
-
-
-# ------------------------------------------------------------------------------------------------
-# Test your code here
-# ------------------------------------------------------------------------------------------------
-
-
-# Example
+  return final_global_indices
 
 
 def timeit(func, *args, **kwargs):
@@ -481,7 +455,7 @@ def test_recall_rate(i):
   A, X = cp.asarray(A), cp.asarray(X)
   ann_result = our_ann(N, D, A, X, K)
   knn_result = cp_knn(N, D, A, X, K)
-  # to numpy
+
   ann_result = cp.asnumpy(ann_result)
   knn_result = cp.asnumpy(knn_result)
   print('Recall rate:', recall_rate(ann_result, knn_result))
@@ -497,7 +471,7 @@ def recall_rate(list1, list2):
 
 
 if __name__ == '__main__':
-  distance = 'l2'
+  distance = 'dot'
   results = {}
   for i in range(1, 11):
     results[i] = test_knn(i)

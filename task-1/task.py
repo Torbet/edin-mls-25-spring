@@ -287,7 +287,7 @@ def our_ann(N, D, A, X, K, distance='l2', assignments=None, centroids=None):
   K1 = min(5, centroids.shape[0])
   K2 = 10
 
-  cluster_center_indices = cp_knn(centroids.shape[0], D, centroids, X, K1, distance)
+  cluster_center_indices = kernel_knn(centroids.shape[0], D, centroids, X, K1, distance)
 
   candidate_indices_list = []
 
@@ -305,7 +305,7 @@ def our_ann(N, D, A, X, K, distance='l2', assignments=None, centroids=None):
       dists_subset = dists[distance]['gpu'](A_subset, X).flatten()
       candidate_local_indices = cp.argsort(dists_subset)
     else:
-      candidate_local_indices = cp_knn(M, D, A_subset, X, current_K2, distance)
+      candidate_local_indices = kernel_knn(M, D, A_subset, X, current_K2, distance)
 
     candidates_global = member_indices[candidate_local_indices]
     candidate_indices_list.append(candidates_global)
@@ -319,7 +319,7 @@ def our_ann(N, D, A, X, K, distance='l2', assignments=None, centroids=None):
   if candidates.shape[0] <= K:
     final_order = cp.argsort(dists[distance]['gpu'](candidates, X).flatten())
   else:
-    final_order = cp_knn(candidates.shape[0], D, candidates, X, K, distance)
+    final_order = kernel_knn(candidates.shape[0], D, candidates, X, K, distance)
   final_global_indices = candidate_indices[final_order]
 
   return final_global_indices
@@ -394,7 +394,7 @@ def test_knn(i=1, distance='l2'):
 
   a, x = cp.asarray(A, dtype=cp.float32), cp.asarray(X, dtype=cp.float32).reshape(1, -1)
   num_clusters = 100 if N > 100 else N
-  assignments, centroids = our_kmeans(N, D, A, num_clusters, distance=distance)
+  assignments, centroids = our_kmeans(N, D, a, num_clusters, distance=distance)
   t, ann_result = timeit(our_ann, N, D, a, x, K, distance, assignments=assignments, centroids=centroids)
   results['ann'] = t
   print('ANN Time taken:', t)
@@ -474,12 +474,14 @@ def recall_rate(list1, list2):
 if __name__ == '__main__':
   # distance = 'dot'
 
-  for distance in ['dot']:
+  for distance in ['l2', 'cosine', 'manhattan', 'dot']:
     results = {}
-    for i in range(1, 11):
+    for i in range(1, 12):
       results[i] = test_knn(i)
 
     print('Results:', results)
     df = pd.DataFrame.from_dict(results, orient='index')
+    df.index.name = 'i'
+    df = df.reset_index()
     df.to_csv(f'results_{distance}.csv', index=True, header=True)
     print(f'Results saved to results_{distance}.csv')

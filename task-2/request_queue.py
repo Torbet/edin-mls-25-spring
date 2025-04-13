@@ -1,23 +1,22 @@
-import asyncio
 import time
 from collections import deque
+import threading
 
 class RequestQueue:
     def __init__(self):
         self.queue = deque()  # Queue to store tuples of (timestamp, request)
-        self._lock = asyncio.Lock()
+        self._lock = threading.Lock()  # Thread-safe lock for queue operations
 
-    async def add_request(self, request):
+    def add_request(self, request):
         # Store the request with its timestamp in a tuple
         timestamp = time.time()
-        async with self._lock:
+        with self._lock:
             self.queue.append((timestamp, request))  # Add timestamp and request as a tuple
 
-    async def get_batch(self, max_size, max_wait_time):
-        now = time.time()
+    def get_batch(self, max_size, max_wait_time):
         batch = []
 
-        async with self._lock:
+        with self._lock:
             # Check if we have enough items for a batch
             if len(self.queue) >= max_size:
                 for _ in range(max_size):
@@ -25,6 +24,8 @@ class RequestQueue:
                     batch.append(request)  # Efficient pop from front
                 return batch
 
+            now = time.time()
+            
             # If not enough, check if the oldest request timed out
             if self._oldest_request_timed_out(now, max_wait_time):
                 while self.queue and len(batch) < max_size:

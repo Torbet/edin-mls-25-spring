@@ -1,70 +1,116 @@
-import argparse
+import asyncio
+import httpx
 import time
-import requests
-import threading
-import json
+import random
+import argparse
+import traceback
+from typing import List, Tuple, Optional
+from statistics import mean, median, quantiles
 
-# Default base URL of your FastAPI RAG service
-BASE_URL = 'http://0.0.0.0:8000/rag'
+# Constants
+TIMEOUT = 60.0
+QUERY = "Which animals can hover in the air?"
+K =  2
+POISSON_SEED = 42
+
+ENDPOINTS = {
+    "original": "http://localhost:8000/rag",
+    "load_balancer": "http://localhost:9000/assign"
+}
 
 
-# Function to send a request to the RAG service
-def send_request(query, rate, duration):
-  start_time = time.time()
-  requests_sent = 0
+class RequestResult:
+    def __init__(self, latency: float, status_code: int):
+        self.latency = latency
+        self.status_code = status_code
 
-  while time.time() - start_time < duration:
-    payload = {'query': query}
+
+async def send_single_request(client: httpx.AsyncClient, endpoint: str, target: str) -> RequestResult:
+    payload = {"query": QUERY, "k": K}
+    start = time.time()
     try:
-      response = requests.post(BASE_URL, json=payload)
-      if response.status_code == 200:
-        print(f'Success: {response.json()}')
-      else:
-        print(f'Failed to get response: {response.status_code}')
+        if target == "load_balancer":
+            assign_resp = await client.get(endpoint)
+            assigned_backend = assign_resp.json().get("backend")
+            if not assigned_backend:
+                raise ValueError("No backend assigned.")
+            response = await client.post(assigned_backend, json=payload)
+        else:
+            response = await client.post(endpoint, json=payload)
+
+        latency = time.time() - start
+        return RequestResult(latency, response.status_code)
     except Exception as e:
-      print(f'Error during request: {e}')
-    requests_sent += 1
-    time.sleep(1 / rate)  # Control the request rate
-
-  print(f'Sent {requests_sent} requests in {duration} seconds at a rate of {rate} rps')
+        print(f"[ERROR] Request failed: {e}")
+        traceback.print_exc()
+        return RequestResult(latency=float('inf'), status_code=0)
 
 
-# Function to handle argument parsing
-def get_args():
-  parser = argparse.ArgumentParser(description='Test FastAPI RAG service with varying request rates')
-  parser.add_argument('--query', type=str, required=True, help='Query to send to the RAG service')
-  parser.add_argument('--rate', type=int, default=1, help='Requests per second')
-  parser.add_argument('--duration', type=int, default=10, help='Duration for the test in seconds')
-  parser.add_argument('--threads', type=int, default=1, help='Number of parallel threads to simulate load')
+async def load_test(
+    rps: int,
+    num_requests: int,
+    mode: str,
+    endpoint: str,
+    target: str
+) -> Tuple[List[RequestResult], float]:
+    if mode == "poisson":
+        random.seed(POISSON_SEED)
 
-  return parser.parse_args()
+    results = []
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        tasks = []
 
+        for i in range(num_requests):
+            task = asyncio.create_task(send_single_request(client, endpoint, target))
+            tasks.append(task)
 
-# Main function to run the test
-def main():
-  args = get_args()
+            # Throttle based on mode
+            if mode == "ideal":
+                await asyncio.sleep(1 / rps)
+            elif mode == "poisson":
+                await asyncio.sleep(random.expovariate(rps))
+            else:
+                raise ValueError("Invalid mode. Choose 'ideal' or 'poisson'.")
 
-  threads = []
-  for i in range(args.threads):
-    # Create a new thread for sending requests
-    thread = threading.Thread(target=send_request, args=(args.query, args.rate, args.duration))
-    threads.append(thread)
-    thread.start()
-
-  # Wait for all threads to finish
-  for thread in threads:
-    thread.join()
-
-  print('All requests have been processed.')
-
-
-if __name__ == '__main__':
-  main()
+        responses = await asyncio.gather(*tasks)
+        return responses, sum(r.latency for r in responses if r.status_code == 200) / rps if rps else 0.0
 
 
-# Server and script running on GPU cluster
+def compute_metrics(results: List[RequestResult], wall_time: float) -> dict:
+    successful_latencies = [r.latency for r in results if r.status_code == 200]
+    failed_count = len([r for r in results if r.status_code != 200])
 
-# python serving_rag &                 - (Include '&' to run it in the background of the same terminal)
-# python testing_script.py --query "Which animals can hover in the air?" --rate 10 --duration 60 --threads 1  (will attempt to send 10 requests per second per thread - current issue is it awaits the response so request rate per thread is not optimal)
-# ps aux | grep serving_rag.py            - (Allows you to see PID so u can kill the process when your done)
-# kill <pid>
+    return {
+        "requests_sent": len(results),
+        "successful": len(successful_latencies),
+        "failed": failed_count,
+        "average_latency": mean(successful_latencies) if successful_latencies else None,
+        "p95_latency": quantiles(successful_latencies, n=20)[18] if len(successful_latencies) >= 20 else None,
+        "throughput_rps": len(successful_latencies) / wall_time if wall_time > 0 else None
+    }
+
+
+async def main():
+    parser = argparse.ArgumentParser(description="Async Load Test Runner")
+    parser.add_argument("--mode", choices=["ideal", "poisson"], default="ideal", help="Request timing mode")
+    parser.add_argument("--target", choices=list(ENDPOINTS.keys()), default="original", help="Target endpoint")
+    parser.add_argument("--rps", type=int, required=True, help="Requests per second")
+    parser.add_argument("--num_requests", type=int, required=True, help="Total number of requests")
+
+    args = parser.parse_args()
+    endpoint = ENDPOINTS[args.target]
+
+    print(f"Running test with:\n - Mode: {args.mode}\n - Target: {args.target}\n - RPS: {args.rps}\n - Total Requests: {args.num_requests}\n")
+
+    start = time.time()
+    results, simulated_time = await load_test(args.rps, args.num_requests, args.mode, endpoint, args.target)
+    wall_time = time.time() - start
+
+    metrics = compute_metrics(results, wall_time)
+    print("\n--- Test Results ---")
+    for key, value in metrics.items():
+        print(f"{key}: {value}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

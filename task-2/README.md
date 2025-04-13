@@ -8,7 +8,7 @@ Three implementations are provided: base, batched, and autoscaling.
 
 - **Base Implementation**: This is the simplest version of the service, which performs document retrieval and text generation without any batching optimisations.
 
-- **Batched Implementation**: This implementation batches incoming requests together to optimize the use of batching when processing with the LLM (Large Language Model). This reduces overhead and improves throughput.
+- **Batched Implementation**: This implementation batches incoming requests together to optimise the use of batching when processing with the LLM (Large Language Model). This reduces overhead and improves throughput.
 
 - **Autoscaling and Load Balancing**: Building on the batched implementation, this version takes things further by dynamically distributing incoming requests across multiple servers. This helps balance the load efficiently and ensures better scalability under high traffic.
 

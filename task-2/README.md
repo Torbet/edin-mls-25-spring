@@ -43,7 +43,7 @@ conda activate rag
 huggingface-cli download <model_name>
 ```
 
-## Running
+## Running the Server
 
 To run the examples, first open an interactive session on the teaching cluster, it is advised to use the most powerfull GPU available on the cluster as startup times and processing greatly depends on the hardware.
 
@@ -51,7 +51,7 @@ The following will use the RTX A6000 GPU
 ```bash
 srun --gres=gpu:a6000:1 --pty bash
 ```
-Aleternitivly you can call the below to get any availble GPU
+alternatively you can call the below to get any availble GPU
 ```bash
 srun --gres=gpu:gpu:1 --pty bash
 ```
@@ -83,6 +83,7 @@ The test runner supports the following command-line arguments:
 ```bash
 python your_script.py --timing_mode <mode> --target <endpoint> --rps <rate> --num_requests <count>
 ```
+
 | Argument         | Description                                                                                                 |
 |------------------|-------------------------------------------------------------------------------------------------------------|
 | `--timing_mode`  | **Request timing mode**:                                                                                     |

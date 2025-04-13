@@ -6,13 +6,13 @@ import os
 import logging
 
 # Configuration constants
-CHECK_INTERVAL = 5  # seconds
+CHECK_INTERVAL = 5  # Interval for checking system status
 MAX_INSTANCES = 3
 MIN_INSTANCES = 2
-SCALE_UP_THRESHOLD = 29.0  # RPS
-SCALE_DOWN_THRESHOLD = 25.0  # RPS
-SCALE_UP_COOLDOWN = 30  # seconds
-SCALE_DOWN_COOLDOWN = 120  # seconds
+SCALE_UP_THRESHOLD = 29.0  # RPS to scale up
+SCALE_DOWN_THRESHOLD = 25.0  # RPS to scale down
+SCALE_UP_COOLDOWN = 30  # Cooldown before scaling up again
+SCALE_DOWN_COOLDOWN = 120  # Cooldown before scaling down again
 BACKEND_BASE_PORT = 8000
 SERVING_SCRIPT = "serving_rag_batched.py"
 
@@ -27,7 +27,7 @@ os.environ["CUDA_MPS_LOG_DIRECTORY"] = "/tmp/nvidia-log"
 processes = {}
 
 async def register_with_balancer(port: int):
-    """Registers a backend instance with the load balancer."""
+    """Registers an instance with the load balancer."""
     url = f"http://localhost:{port}"
     async with httpx.AsyncClient() as client:
         try:
@@ -37,7 +37,7 @@ async def register_with_balancer(port: int):
             logger.error(f"Failed to register instance on port {port}: {e}")
 
 async def unregister_from_balancer(port: int):
-    """Unregisters a backend instance from the load balancer."""
+    """Unregisters an instance from the load balancer."""
     url = f"http://localhost:{port}"
     async with httpx.AsyncClient() as client:
         try:
@@ -47,7 +47,7 @@ async def unregister_from_balancer(port: int):
             logger.error(f"Failed to unregister instance on port {port}: {e}")
 
 async def start_instance(port: int):
-    """Starts a new backend instance if it is not already running."""
+    """Starts a new backend instance if not running."""
     if port in processes:
         logger.info(f"Instance on port {port} is already running.")
         return
@@ -71,7 +71,7 @@ async def start_instance(port: int):
         logger.error(f"Failed to start instance on port {port}: {e}")
 
 async def stop_instance(port: int):
-    """Stops a running backend instance and unregisters it from the load balancer."""
+    """Stops a running backend instance."""
     proc = processes.get(port)
     if proc:
         proc.terminate()
@@ -81,7 +81,7 @@ async def stop_instance(port: int):
         await unregister_from_balancer(port)
 
 async def get_total_rps() -> float:
-    """Gets the total RPS from the load balancer."""
+    """Fetches the total RPS from the load balancer."""
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.get("http://localhost:9000/metrics")
@@ -95,9 +95,8 @@ async def get_total_rps() -> float:
         return 0.0
 
 async def autoscaler_loop():
-    """Main loop that monitors RPS and scales backend instances accordingly."""
+    """Main loop for autoscaling backend instances."""
     current_instances = MIN_INSTANCES
-    # Start the initial instances
     await scale_up_instances(current_instances)
 
     last_scale_up_time = 0
@@ -114,7 +113,7 @@ async def autoscaler_loop():
         if total_rps >= SCALE_UP_THRESHOLD and current_instances < MAX_INSTANCES and can_scale_up:
             port = BACKEND_BASE_PORT + current_instances
             await start_instance(port)
-            await asyncio.sleep(15)  # wait for the model to load
+            await asyncio.sleep(15)  # Wait for model to load
             await register_with_balancer(port)
             current_instances += 1
             last_scale_up_time = now
@@ -129,7 +128,7 @@ async def autoscaler_loop():
         await asyncio.sleep(CHECK_INTERVAL)
 
 async def wait_until_ready(port: int, timeout: int = 200) -> bool:
-    """Waits until the instance on the specified port is ready."""
+    """Waits until the instance is ready to handle requests."""
     url = f"http://localhost:{port}/rag"
     async with httpx.AsyncClient() as client:
         start = time.time()
@@ -144,11 +143,11 @@ async def wait_until_ready(port: int, timeout: int = 200) -> bool:
     return False
 
 async def scale_up_instances(current_instances: int):
-    """Initial instance scaling to match the desired instance count."""
+    """Scales up initial backend instances."""
     for i in range(current_instances):
         port = BACKEND_BASE_PORT + i
         await start_instance(port)
         await register_with_balancer(port)
 
 if __name__ == "__main__":
-    asyncio.run(autoscaler_loop())
+    asyncio.run(autoscaler_loop())  # Run the autoscaling loop

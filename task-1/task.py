@@ -231,15 +231,14 @@ def our_kmeans(N, D, A, K, distance='l2', batch_size=1024):
   max_iter = 100
   tol = 1e-4
 
-  A_gpu = cp.asarray(A, dtype=cp.float32)
   init_indices = np.random.choice(N, K, replace=False)
-  centroids = A_gpu[init_indices]
+  centroids = A[init_indices]
 
   for it in range(max_iter):
     assignments = cp.empty((N,), dtype=cp.int32)
 
     for i in range(0, N, batch_size):
-      A_batch = A_gpu[i : i + batch_size]
+      A_batch = A[i : i + batch_size]
 
       dists = cp.sum((A_batch[:, None, :] - centroids[None, :, :]) ** 2, axis=2)
       assignments[i : i + batch_size] = cp.argmin(dists, axis=1)
@@ -250,7 +249,7 @@ def our_kmeans(N, D, A, K, distance='l2', batch_size=1024):
       if cp.sum(mask) == 0:
         new_centroids.append(centroids[k])
       else:
-        new_centroids.append(cp.mean(A_gpu[mask], axis=0))
+        new_centroids.append(cp.mean(A[mask], axis=0))
     new_centroids = cp.stack(new_centroids, axis=0)
 
     shift = cp.linalg.norm(new_centroids - centroids)

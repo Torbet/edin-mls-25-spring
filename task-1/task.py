@@ -15,85 +15,168 @@ torch.cuda.manual_seed(0)
 torch.cuda.manual_seed_all(0)
 
 
-def distance_cosine(X, Y):
-  X_norm = cp.linalg.norm(X, axis=1, keepdims=True)
+import cupy as cp
+import numpy as np
+import torch
+
+# --- Batched Distance Functions using CuPy (GPU) ---
+
+
+def distance_cosine(X, Y, batch_size=1024):
+  # X: (n, D), Y: (m, D)
+  n = X.shape[0]
+  result = cp.empty((n, Y.shape[0]), dtype=cp.float32)
+  # Pre-compute normalization for Y (shared for all batches)
   Y_norm = cp.linalg.norm(Y, axis=1, keepdims=True)
-  X_normalized = X / (X_norm + 1e-8)
   Y_normalized = Y / (Y_norm + 1e-8)
-  dot_product = cp.dot(X_normalized, Y_normalized.T)
-  return 1 - dot_product
-
-
-def distance_cosine_np(X, Y):
-  X_norm = np.linalg.norm(X, axis=1, keepdims=True)
-  Y_norm = np.linalg.norm(Y, axis=1, keepdims=True)
-  X_normalized = X / (X_norm + 1e-8)
-  Y_normalized = Y / (Y_norm + 1e-8)
-  dot_product = np.dot(X_normalized, Y_normalized.T)
-  return 1 - dot_product
-
-
-def distance_cosine_torch(X, Y):
-  X_norm = torch.norm(X, dim=1, keepdim=True)
-  Y_norm = torch.norm(Y, dim=1, keepdim=True)
-  X_normalized = X / (X_norm + 1e-8)
-  Y_normalized = Y / (Y_norm + 1e-8)
-  dot_product = torch.mm(X_normalized, Y_normalized.T)
-  return 1 - dot_product
-
-
-def distance_l2(X, Y):
-  return cp.sqrt(cp.sum((X[:, None] - Y) ** 2, axis=2))
-
-
-def distance_l2_batch(A, X, batch_size=1024):
-  N, D = A.shape
-  result = cp.empty((N, 1), dtype=cp.float32)
-  for i in range(0, N, batch_size):
-    A_batch = A[i : i + batch_size]
-    result[i : i + batch_size] = cp.sqrt(cp.sum((A_batch[:, None] - X) ** 2, axis=2))
+  for i in range(0, n, batch_size):
+    X_batch = X[i : i + batch_size]
+    X_norm = cp.linalg.norm(X_batch, axis=1, keepdims=True)
+    X_normalized = X_batch / (X_norm + 1e-8)
+    dot_product = cp.dot(X_normalized, Y_normalized.T)
+    result[i : i + batch_size] = 1 - dot_product
   return result
 
 
-def distance_l2_np(X, Y):
-  return np.sqrt(np.sum((X[:, None] - Y) ** 2, axis=2))
+def distance_l2(X, Y, batch_size=1024):
+  # Computes Euclidean (L2) distances: sqrt(sum((x-y)^2, axis=2))
+  n = X.shape[0]
+  result = cp.empty((n, Y.shape[0]), dtype=cp.float32)
+  for i in range(0, n, batch_size):
+    X_batch = X[i : i + batch_size]
+    result[i : i + batch_size] = cp.sqrt(cp.sum((X_batch[:, None] - Y) ** 2, axis=2))
+  return result
 
 
-def distance_l2_torch(X, Y):
-  return torch.sqrt(torch.sum((X[:, None] - Y) ** 2, dim=2))
+def distance_dot(X, Y, batch_size=1024):
+  # Computes dot product; note that if you want a distance you may need to adjust the value
+  n = X.shape[0]
+  result = cp.empty((n, Y.shape[0]), dtype=cp.float32)
+  for i in range(0, n, batch_size):
+    X_batch = X[i : i + batch_size]
+    result[i : i + batch_size] = cp.dot(X_batch, Y.T)
+  return result
 
 
-def distance_dot(X, Y):
-  return cp.dot(X, Y.T)
+def distance_manhattan(X, Y, batch_size=1024):
+  # Computes Manhattan (L1) distance: sum(abs(x-y), axis=2)
+  n = X.shape[0]
+  result = cp.empty((n, Y.shape[0]), dtype=cp.float32)
+  for i in range(0, n, batch_size):
+    X_batch = X[i : i + batch_size]
+    result[i : i + batch_size] = cp.sum(cp.abs(X_batch[:, None] - Y), axis=2)
+  return result
 
 
-def distance_dot_np(X, Y):
-  return np.dot(X, Y.T)
+# --- Batched Distance Functions using NumPy (CPU) ---
 
 
-def distance_dot_torch(X, Y):
-  return torch.mm(X, Y.T)
+def distance_cosine_np(X, Y, batch_size=1024):
+  n = X.shape[0]
+  result = np.empty((n, Y.shape[0]), dtype=np.float32)
+  Y_norm = np.linalg.norm(Y, axis=1, keepdims=True)
+  Y_normalized = X / (Y_norm + 1e-8)  # This seems an inadvertent error, so see below:
+  # --- Correction: We need to normalize Y, not X ---
+  Y_norm = np.linalg.norm(Y, axis=1, keepdims=True)
+  Y_normalized = Y / (Y_norm + 1e-8)
+  for i in range(0, n, batch_size):
+    X_batch = X[i : i + batch_size]
+    X_norm = np.linalg.norm(X_batch, axis=1, keepdims=True)
+    X_normalized = X_batch / (X_norm + 1e-8)
+    dot_product = np.dot(X_normalized, Y_normalized.T)
+    result[i : i + batch_size] = 1 - dot_product
+  return result
 
 
-def distance_manhattan(X, Y):
-  return cp.sum(cp.abs(X[:, None] - Y), axis=2)
+def distance_l2_np(X, Y, batch_size=1024):
+  n = X.shape[0]
+  result = np.empty((n, Y.shape[0]), dtype=np.float32)
+  for i in range(0, n, batch_size):
+    X_batch = X[i : i + batch_size]
+    result[i : i + batch_size] = np.sqrt(np.sum((X_batch[:, None] - Y) ** 2, axis=2))
+  return result
 
 
-def distance_manhattan_np(X, Y):
-  return np.sum(np.abs(X[:, None] - Y), axis=2)
+def distance_dot_np(X, Y, batch_size=1024):
+  n = X.shape[0]
+  result = np.empty((n, Y.shape[0]), dtype=np.float32)
+  for i in range(0, n, batch_size):
+    X_batch = X[i : i + batch_size]
+    result[i : i + batch_size] = np.dot(X_batch, Y.T)
+  return result
 
 
-def distance_manhattan_torch(X, Y):
-  return torch.sum(torch.abs(X[:, None] - Y), dim=2)
+def distance_manhattan_np(X, Y, batch_size=1024):
+  n = X.shape[0]
+  result = np.empty((n, Y.shape[0]), dtype=np.float32)
+  for i in range(0, n, batch_size):
+    X_batch = X[i : i + batch_size]
+    result[i : i + batch_size] = np.sum(np.abs(X_batch[:, None] - Y), axis=2)
+  return result
 
+
+# --- Batched Distance Functions using Torch ---
+
+
+def distance_cosine_torch(X, Y, batch_size=1024):
+  # Assumes X, Y are torch tensors.
+  n = X.shape[0]
+  device = X.device
+  m = Y.shape[0]
+  result = torch.empty((n, m), device=device, dtype=torch.float32)
+  Y_norm = torch.norm(Y, dim=1, keepdim=True)
+  Y_normalized = Y / (Y_norm + 1e-8)
+  for i in range(0, n, batch_size):
+    X_batch = X[i : i + batch_size]
+    X_norm = torch.norm(X_batch, dim=1, keepdim=True)
+    X_normalized = X_batch / (X_norm + 1e-8)
+    dot_product = torch.mm(X_normalized, Y_normalized.T)
+    result[i : i + batch_size] = 1 - dot_product
+  return result
+
+
+def distance_l2_torch(X, Y, batch_size=1024):
+  n = X.shape[0]
+  m = Y.shape[0]
+  device = X.device
+  result = torch.empty((n, m), device=device, dtype=torch.float32)
+  for i in range(0, n, batch_size):
+    X_batch = X[i : i + batch_size]
+    result[i : i + batch_size] = torch.sqrt(torch.sum((X_batch[:, None] - Y) ** 2, dim=2))
+  return result
+
+
+def distance_dot_torch(X, Y, batch_size=1024):
+  n = X.shape[0]
+  m = Y.shape[0]
+  device = X.device
+  result = torch.empty((n, m), device=device, dtype=torch.float32)
+  for i in range(0, n, batch_size):
+    X_batch = X[i : i + batch_size]
+    result[i : i + batch_size] = torch.mm(X_batch, Y.T)
+  return result
+
+
+def distance_manhattan_torch(X, Y, batch_size=1024):
+  n = X.shape[0]
+  m = Y.shape[0]
+  device = X.device
+  result = torch.empty((n, m), device=device, dtype=torch.float32)
+  for i in range(0, n, batch_size):
+    X_batch = X[i : i + batch_size]
+    result[i : i + batch_size] = torch.sum(torch.abs(X_batch[:, None] - Y), dim=2)
+  return result
+
+
+# --- Updating the dictionary to use batched versions ---
 
 dists = {
   'l2': {'cpu': distance_l2_np, 'gpu': distance_l2, 'torch': distance_l2_torch},
-  'l2_batch': {'cpu': distance_l2_np, 'gpu': distance_l2_batch, 'torch': distance_l2_torch},
   'cosine': {'cpu': distance_cosine_np, 'gpu': distance_cosine, 'torch': distance_cosine_torch},
   'dot': {'cpu': distance_dot_np, 'gpu': distance_dot, 'torch': distance_dot_torch},
   'manhattan': {'cpu': distance_manhattan_np, 'gpu': distance_manhattan, 'torch': distance_manhattan_torch},
 }
+
 
 topk_kernel = cp.RawKernel(
   r"""
@@ -345,8 +428,9 @@ def test_kmeans(distance='l2'):
   print('K Means Time taken:', end - start)
 
 
-def test_knn(i=1, distance='l2'):
-  N, D, A, X, K = testdata_knn(f'data/{i}.json')
+def test_knn(n, d, distance='l2'):
+  print('Testing KNN with n:', n, 'd:', d, 'distance:', distance)
+  N, D, A, X, K = testdata_knn(f'data/{n}_{d}.json')
 
   results = {}
 
@@ -474,14 +558,16 @@ def recall_rate(list1, list2):
 if __name__ == '__main__':
   # distance = 'dot'
 
-  for distance in ['l2', 'cosine', 'manhattan', 'dot']:
+  for distance in ['dot']:
     results = {}
-    for i in range(1, 12):
-      results[i] = test_knn(i)
+    for n in [4000, 40000, 400000]:
+      for d in [2, 512, 1024]:
+        r = test_knn(n, d, distance)
+        results[f'{n}_{d}'] = r
 
     print('Results:', results)
     df = pd.DataFrame.from_dict(results, orient='index')
     df.index.name = 'i'
     df = df.reset_index()
-    df.to_csv(f'results_{distance}.csv', index=True, header=True)
-    print(f'Results saved to results_{distance}.csv')
+    df.to_csv(f'results_independent_{distance}.csv', index=True, header=True)
+    print(f'Results saved to results_independent_{distance}.csv')

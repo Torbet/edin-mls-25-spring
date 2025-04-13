@@ -2,6 +2,7 @@ import time
 from collections import deque
 import threading
 
+
 class RequestQueue:
     def __init__(self):
         self.queue = deque()  # Queue to store tuples of (timestamp, request)
@@ -33,11 +34,11 @@ class RequestQueue:
                     batch.append(request)  # Efficient pop from front
                 return batch
 
-        return batch
+    return batch
 
-    def _oldest_request_timed_out(self, now, max_wait_time):
-        if self.queue:
-            timestamp, _ = self.queue[0]  # Get the timestamp of the oldest request
-            if now - timestamp > max_wait_time:
-                return True
-        return False
+  def _oldest_request_timed_out(self, now, max_wait_time):
+    if self.queue:
+      timestamp, _ = self.queue[0]  # Get the timestamp of the oldest request
+      if now - timestamp > max_wait_time:
+        return True
+    return False

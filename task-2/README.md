@@ -64,7 +64,9 @@ python serving_rag.py &
 #or
 python serving_rag_batched.py &
 #or
-python serving_rag_scaling.py &
+python autoscaler.py &
+#then
+python load_balancer.py &
 ```
 To test the service connections you can do it by:
 
